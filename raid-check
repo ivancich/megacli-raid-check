@@ -1,0 +1,138 @@
+#!/bin/bash
+
+megacli="/opt/MegaRAID/MegaCli/MegaCli64"
+
+echo_stderr()
+{
+    echo "$@" >&2
+}
+
+help() {
+    cmd=$(basename $0)
+    echo "Usage: $cmd [-bdqsh]"
+    echo ""
+    echo "Options:"
+    echo "    -b | --battery : report battery status"
+    echo "    -d | --drives  : report physical and virtual drive status"
+    echo "    -q | --quiet   : only display message to stderr if problem"
+    echo "    -s | --silent  : same as -q/--quiet"
+    echo "    -h | --help    : display this help text"
+    echo ""
+    echo "Exit Status:"
+    echo "    0 : no problems found"
+    echo "    1 : problem found"
+    echo "    2 : invocation error"
+}
+
+temp="/tmp/raid-check.$$"
+silent=0
+chk_bat=0
+chk_drv=0
+bat_prob=0
+drv_prob=0
+
+for i in "$@" ;do
+    case $i in
+	-b|--battery)
+	    chk_bat=1
+	    shift
+	    ;;
+	-d|--drives)
+	    chk_drv=1
+	    shift
+	    ;;
+	-q|-s|--quiet|--silent)
+	    silent=1
+	    shift
+	    ;;
+	-h|--help)
+	    help
+	    exit 0
+	    ;;
+	*)
+	    echo_stderr "error: unknown argument \"$i\""
+	    exit 2
+    esac
+done
+
+if [ "$(id -u)" -ne 0 ] ;then
+    echo_stderr "error: must be run as root"
+    exit 2
+fi
+
+# if neither battery nor drives specified, assume both wanted
+if [ "$chk_bat" -eq 0 -a "$chk_drv" -eq 0 ] ;then
+    chk_bat=1
+    chk_drv=1
+fi
+
+if [ "$chk_bat" -eq 1 ] ;then
+    $megacli -AdpBbuCmd -aAll | \
+	egrep 'Battery State|Battery Replacement' | \
+	sed 's/^ *//' | sed 's/  */ /g' | sed 's/ *:/:/g' >$temp
+    if grep 'Battery State' $temp | grep -qv Optimal ;then
+	bat_prob=1
+    fi
+    if grep 'Battery Replacement' $temp | grep -qv No ;then
+	bat_prob=1
+    fi
+    if [ "$silent" -eq 0 ] ;then
+	cat $temp
+    fi
+fi
+
+if [ "$chk_drv" -eq 1 ] ;then
+    $megacli -AdpAllInfo -aALL | \
+	sed -n -e '/Virtual Drives/,/Failed Disks/p' >$temp
+    if grep -q 'Degraded *: [^0]' $temp ;then
+	drv_prob=1
+    fi
+    if grep -q 'Offline *: [^0]' $temp ;then
+	drv_prob=1
+    fi
+    if grep -q 'Critical Disks *: [^0]' $temp ;then
+	drv_prob=1
+    fi
+    if grep -q 'Failed Disks *: [^0]' $temp ;then
+	drv_prob=1
+    fi
+    if [ "$silent" -eq 0 ] ;then
+	cat $temp
+    fi
+fi
+
+if [ "$silent" -eq 1 ] ;then
+    if [ "$bat_prob" -eq 1 ] ;then
+	echo_stderr "battery problem"
+    fi
+    if [ "$drv_prob" -eq 1 ] ;then
+	echo_stderr "drive problem"
+    fi
+fi
+
+if [ -e "$temp" ] ;then
+    rm -f "$temp"
+fi
+
+if [ "$bat_prob" -eq 1 -o "$drv_prob" -eq 1 ] ;then
+    exit 1
+else
+    exit 0
+fi
+
+#### nothing below has any effect ####
+
+# $megacli -LDInfo -Lall -aALL | less
+
+# $megacli -EncInfo -aALL
+
+# other stuff for future enhancement
+if false ;then
+    for e in 252 ;do
+	for s in 0 1 2 3 4 5 6 7 ;do
+	    # $megacli -PDInfo -PhysDrv "[${e}:${s}]" -aALL
+	    echo foo
+	done
+    done
+fi
+
